@@ -1,0 +1,8 @@
+version: "3.8"
+services:
+  testservice:
+    build: testservice/
+    ports:
+      - "3030:3030"
+  muck:
+    build: .

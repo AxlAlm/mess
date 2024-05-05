@@ -1,5 +1,7 @@
 use std::fmt;
 
+use tracing::info;
+
 // error
 #[derive(Debug)]
 pub enum RegistrationError {
@@ -27,6 +29,7 @@ pub struct DummyRegistration;
 
 impl Registration for DummyRegistration {
     fn register(&self) -> Result<(), RegistrationError> {
+        info!("Muck has been registered");
         return Ok(());
     }
 

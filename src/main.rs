@@ -4,10 +4,14 @@ mod registration;
 
 use muck::muck::{Muck, MuckConfig};
 
+use tracing_subscriber;
+
 fn main() {
+    tracing_subscriber::fmt::init();
+
     let muck1 = Muck {
         config: MuckConfig {
-            name: "Service One".to_string(),
+            name: "My Mucky Muck".to_string(),
         },
         registration: Box::new(registration::DummyRegistration),
         oozes: vec![Box::new(

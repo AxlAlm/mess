@@ -3,6 +3,8 @@ use crate::registration;
 use std::thread;
 use std::time::Duration;
 
+use tracing::{info, span, Level};
+
 pub struct Muck {
     pub config: MuckConfig,
     pub registration: Box<dyn registration::Registration>,
@@ -15,22 +17,26 @@ pub struct MuckConfig {
 
 impl Muck {
     pub fn start(&self) {
-        println!("Muck {} started successfully!", self.config.name);
+        // let span = span!(Level::INFO, "muck", id = "123");
+        // let _enter = span.enter();
+        info!(name:"ok", what="ok", "Muck {} is staring ...", self.config.name);
 
         match &self.registration.register() {
-            Ok(_) => println!("Service registered successfully."),
+            Ok(_) => info!("Muck was registered successfully."),
             Err(e) => panic!("Error registering service: {}", e),
         }
 
         for ooze in &self.oozes {
             match ooze.run() {
-                Ok(_) => println!("Ooze started"),
+                Ok(_) => info!("Ooze started"),
                 Err(e) => panic!("Error running Ooze: {}", e),
             }
         }
 
+        info!("Muck {} started successfully", self.config.name);
+
         loop {
-            println!("Main thread is still running...");
+            info!("Main thread is still running...");
             thread::sleep(Duration::from_secs(5));
         }
     }
