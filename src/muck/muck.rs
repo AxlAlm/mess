@@ -1,19 +1,12 @@
+use crate::ooze;
+use crate::registration;
 use std::thread;
 use std::time::Duration;
 
-pub trait Registration {
-    fn register(&self);
-    fn deregister(&self);
-}
-
-pub trait Ooze {
-    fn run(&self) -> thread::JoinHandle<()>;
-}
-
 pub struct Muck {
     pub config: MuckConfig,
-    pub registration: Box<dyn Registration>,
-    pub oozes: Vec<Box<dyn Ooze>>,
+    pub registration: Box<dyn registration::Registration>,
+    pub oozes: Vec<Box<dyn ooze::Ooze>>,
 }
 
 pub struct MuckConfig {
@@ -23,9 +16,17 @@ pub struct MuckConfig {
 impl Muck {
     pub fn start(&self) {
         println!("Muck {} started successfully!", self.config.name);
-        &self.registration.register();
+
+        match &self.registration.register() {
+            Ok(_) => println!("Service registered successfully."),
+            Err(e) => panic!("Error registering service: {}", e),
+        }
+
         for ooze in &self.oozes {
-            ooze.run();
+            match ooze.run() {
+                Ok(_) => println!("Ooze started"),
+                Err(e) => panic!("Error running Ooze: {}", e),
+            }
         }
 
         loop {
