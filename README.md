@@ -1,4 +1,4 @@
-# Mess! Simple service ~~mess~~mesh written in rust! :smiling_imp:
+# Mess: A simple service ~~mess~~ mesh written in rust! :smiling_imp:
 
 ## features
 
