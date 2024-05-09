@@ -1,6 +1,4 @@
-# mess
-
-## Simple service ~~mess~~mesh written in rust!
+# Mess! Simple service ~~mess~~mesh written in rust! :smiling_imp:
 
 ## features
 
@@ -53,6 +51,6 @@ Deps:
 
 To deploy migration and setup db:
 
-    `sqitch deploy db:sqlite:mess.db`
+    sqitch deploy db:sqlite:mess.db
 
 for info on how to migrate [here](https://sqitch.org/docs/manual/sqitchtutorial-sqlite/) is a good sqitch tutorial
