@@ -3,6 +3,16 @@ services:
   testservice:
     build: testservice/
     ports:
-      - "3030:3030"
+      - "80"
+    deploy:
+      replicas: 2
+    volumes:
+      - log-volume:/var/log
   muck:
     build: .
+    depends_on:
+      - testservice
+    volumes:
+      - log-volume:/var/log
+volumes:
+  log-volume:
