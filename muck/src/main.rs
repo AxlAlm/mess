@@ -1,6 +1,5 @@
 mod muck;
-mod ooze;
-mod registration;
+mod status_gossiper;
 
 use muck::muck::{Muck, MuckConfig};
 
@@ -13,10 +12,7 @@ fn main() {
         config: MuckConfig {
             name: "My Mucky Muck".to_string(),
         },
-        registration: Box::new(registration::DummyRegistration),
-        oozes: vec![Box::new(
-            ooze::console_health_monitor::ConsoleHealthMonitoring,
-        )],
+        status_gossiper: Box::new(status_gossiper::)
     };
 
     muck1.start();

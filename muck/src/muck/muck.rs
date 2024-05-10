@@ -1,14 +1,12 @@
-use crate::ooze;
-use crate::registration;
+use crate::status_gossiper;
 use std::thread;
 use std::time::Duration;
 
-use tracing::{info, span, Level};
+use tracing::info;
 
 pub struct Muck {
     pub config: MuckConfig,
-    pub registration: Box<dyn registration::Registration>,
-    pub oozes: Vec<Box<dyn ooze::Ooze>>,
+    pub status_gossiper: Box<dyn status_gossiper::ServiceInfoGossiper>,
 }
 
 pub struct MuckConfig {
@@ -21,38 +19,15 @@ impl Muck {
         // let _enter = span.enter();
         info!(name:"ok", what="ok", "Muck {} is staring ...", self.config.name);
 
-        match &self.registration.register() {
-            Ok(_) => info!("Muck was registered successfully."),
-            Err(e) => panic!("Error registering service: {}", e),
-        }
-
-        for ooze in &self.oozes {
-            match ooze.run() {
-                Ok(_) => info!("Ooze started"),
-                Err(e) => panic!("Error running Ooze: {}", e),
-            }
+        match self.status_gossiper.gossip() {
+            Ok(_) => info!("Gossip start"),
+            Err(e) => panic!("Error starting gossip: {}", e),
         }
 
         info!("Muck {} started successfully", self.config.name);
-
         loop {
             info!("Main thread is still running...");
             thread::sleep(Duration::from_secs(5));
         }
     }
 }
-
-// pub trait Registration {
-//     fn register(&self, name: &str);
-// }
-
-// trait  {e
-//     fn report_health(&self);
-// }
-
-// impl ReportHealth for Muck {
-//     fn report_health(&self) {
-//         log::info!("Muck {} started succesfully!", self.config.name)
-//     }
-// }
-//
