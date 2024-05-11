@@ -6,7 +6,7 @@ use tracing::info;
 
 pub struct Muck {
     pub config: MuckConfig,
-    pub status_gossiper: Box<dyn status_gossiper::ServiceInfoGossiper>,
+    pub watcher: status_gossiper::Watcher,
 }
 
 pub struct MuckConfig {
@@ -18,11 +18,7 @@ impl Muck {
         // let span = span!(Level::INFO, "muck", id = "123");
         // let _enter = span.enter();
         info!(name:"ok", what="ok", "Muck {} is staring ...", self.config.name);
-
-        match self.status_gossiper.gossip() {
-            Ok(_) => info!("Gossip start"),
-            Err(e) => panic!("Error starting gossip: {}", e),
-        }
+        let _ = self.watcher.run();
 
         info!("Muck {} started successfully", self.config.name);
         loop {
