@@ -58,7 +58,7 @@ fn main() {
                         status: "ok".to_string(),
                     },
                     seed_nodes,
-                    10,
+                    60,
                     3,
                 ),
             };

@@ -1,3 +1,4 @@
+use rand::Rng;
 use rand::{seq::SliceRandom, thread_rng};
 use serde::{Deserialize, Serialize};
 use serde_json;
@@ -34,7 +35,13 @@ impl Default for NodeInfo {
     }
 }
 
-type NodeInfoTable = Arc<Mutex<HashMap<String, NodeInfo>>>;
+struct NodeInfoRow {
+    n_times_recevied: u64,
+    node_info: NodeInfo,
+    // node_addresses_sent_to: Vec<String>,
+}
+
+type NodeInfoTable = Arc<Mutex<HashMap<String, NodeInfoRow>>>;
 
 pub struct Watcher {
     node: NodeInfo,
@@ -54,14 +61,23 @@ impl Watcher {
         for address in &seed_node_addresses {
             table.insert(
                 address.to_string(),
-                NodeInfo {
-                    address: address.to_string(),
-                    ..Default::default()
+                NodeInfoRow {
+                    n_times_recevied: 0,
+                    node_info: NodeInfo {
+                        address: address.to_string(),
+                        ..Default::default()
+                    },
                 },
             );
         }
 
-        table.insert(node.id.to_string(), node.clone());
+        table.insert(
+            node.id.to_string(),
+            NodeInfoRow {
+                n_times_recevied: 0,
+                node_info: node.clone(),
+            },
+        );
         let shared_table = Arc::new(Mutex::new(table));
 
         Watcher {
@@ -77,7 +93,7 @@ impl Watcher {
         let node_info_table = self.node_info_table.clone();
         let gossip_to_n_nodes = self.gossip_to_n_nodes;
         let node = self.node.clone();
-        let poll_interval_milisecs = 1000;
+        let poll_interval_milisecs = 10;
 
         let socket = UdpSocket::bind(&self.node.address).map_err(|e| e.to_string())?;
         socket.set_nonblocking(true).map_err(|e| e.to_string())?;
@@ -103,7 +119,7 @@ impl Watcher {
 
         let s_table = node_info_table.clone();
         let _ = thread::spawn(move || loop {
-            thread::sleep(Duration::from_millis(10000));
+            thread::sleep(Duration::from_millis(1000));
             println!("Nodes stored: {:?}/10", s_table.lock().unwrap().len())
         });
 
@@ -122,46 +138,44 @@ fn send_periodic_node_info_process(
     node_info_table: NodeInfoTable,
     socket: Arc<Mutex<UdpSocket>>,
 ) {
-    let mut last_update_sent_at = Instant::now();
     loop {
-        thread::sleep(Duration::from_millis(1000));
+        let table = node_info_table.lock().unwrap();
+        let row = match table.get(node_id) {
+            Some(row) => row,
+            None => continue,
+        };
 
-        if last_update_sent_at.elapsed() >= Duration::from_secs(heartbeat_interval_secs) {
-            let table = node_info_table.lock().unwrap();
-            let node = table.get(node_id);
-            if node.is_none() {
+        let node = NodeInfo {
+            id: row.node_info.id.clone(),
+            address: row.node_info.address.clone(),
+            version: row.node_info.version.clone() + 1,
+            generation: row.node_info.generation.clone(),
+            status: "OK".to_string(),
+            sent_at: row.node_info.sent_at.clone(),
+        };
+
+        let msg = match serde_json::to_string(&node) {
+            Ok(s) => s,
+            Err(_) => {
+                println!("Failed to serialize node");
                 continue;
             }
-            let node = node.unwrap();
-            let node = NodeInfo {
-                id: node.id.clone(),
-                address: node.address.clone(),
-                version: node.version.clone() + 1,
-                generation: node.generation.clone(),
-                status: "OK".to_string(),
-                sent_at: node.sent_at.clone(),
-            };
+        };
 
-            let msg = match serde_json::to_string(&node) {
-                Ok(s) => s,
-                Err(_) => {
-                    println!("Failed to serialize node");
-                    continue;
-                }
-            };
-
-            let addresses: Vec<String> = table.iter().map(|(_, v)| v.address.clone()).collect();
-            let selected_addresses = select_random_n_strings(addresses, gossip_to_n_nodes);
-            println!("{:?}", selected_addresses);
-            let l_socket = socket.lock().unwrap();
-            match send_msg(msg, selected_addresses, &l_socket) {
-                Ok(_) => {
-                    // println!("Succefully sent node info");
-                    last_update_sent_at = Instant::now()
-                }
-                Err(e) => {
-                    println!("{}", e.to_string());
-                }
+        let addresses: Vec<String> = table
+            .iter()
+            .map(|(_, v)| v.node_info.address.clone())
+            .collect();
+        let selected_addresses = select_random_n_strings(addresses, gossip_to_n_nodes);
+        let l_socket = socket.lock().unwrap();
+        match send_msg(msg, selected_addresses, &l_socket) {
+            Ok(_) => {
+                drop(l_socket);
+                drop(table);
+                thread::sleep(Duration::from_secs(heartbeat_interval_secs));
+            }
+            Err(e) => {
+                println!("{}", e.to_string());
             }
         }
     }
@@ -198,27 +212,40 @@ fn gossip_process(
         };
 
         let table = &mut node_info_table.lock().unwrap();
-        let is_info_new = match table.get(&received_node_info.id) {
-            Some(current_info) => {
-                if received_node_info.generation > current_info.generation
-                    || received_node_info.version > current_info.version
-                {
-                    true;
+        let n_times_received = match table.get(&received_node_info.id) {
+            Some(current) => {
+                let is_new = received_node_info.generation > current.node_info.generation
+                    || received_node_info.version > current.node_info.version;
+
+                if is_new {
+                    0
+                } else {
+                    current.n_times_recevied + 1
                 }
-                false
             }
-            None => true,
+            None => 0,
         };
 
-        if is_info_new {
-            // println!("Updated node info!");
-            table.insert(
-                received_node_info.id.to_string(),
-                received_node_info.clone(),
-            );
+        if !should_forward(n_times_received) {
+            continue;
         }
 
-        let addresses: Vec<String> = table.iter().map(|(_, v)| v.address.clone()).collect();
+        // if n_times_received > 0 {
+        //     continue;
+        // }
+
+        table.insert(
+            received_node_info.id.to_string(),
+            NodeInfoRow {
+                n_times_recevied: n_times_received,
+                node_info: received_node_info.clone(),
+            },
+        );
+
+        let addresses: Vec<String> = table
+            .iter()
+            .map(|(_, v)| v.node_info.address.clone())
+            .collect();
         let selected_addresses = select_random_n_strings(addresses, gossip_to_n_nodes);
         let msg = match serde_json::to_string(&received_node_info) {
             Ok(s) => s,
@@ -230,7 +257,7 @@ fn gossip_process(
 
         match send_msg(msg, selected_addresses, &l_socket) {
             Ok(_) => {
-                // println!("Succefully sent node info");
+                println!("sending update");
             }
             Err(e) => {
                 println!("{}", e.to_string());
@@ -257,4 +284,12 @@ fn select_random_n_strings(a: Vec<String>, n: usize) -> Vec<String> {
         return a;
     }
     a[..n].to_vec()
+}
+
+fn should_forward(n_times_receieved: u64) -> bool {
+    let base_probability = 1.0; // Starting probability of forwarding
+    let decay_factor = 0.3; // Adjust this factor based on your needs
+    let probability = base_probability * f64::exp(-decay_factor * n_times_receieved as f64);
+    let mut rng = rand::thread_rng();
+    rng.gen::<f64>() < probability
 }
