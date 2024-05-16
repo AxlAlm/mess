@@ -6,79 +6,125 @@ use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::net::UdpSocket;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use std::{thread, time};
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct NodeInfo {
-    pub id: String,
-    pub address: String,
-    pub status: String,
-    pub generation: u64,
-    pub version: u64,
-    pub sent_at: u64,
+type NodeID = String;
+
+fn now_unix() -> u64 {
+    return time::SystemTime::now()
+        .duration_since(time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
 }
 
-impl Default for NodeInfo {
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct HeartBeat {
+    pub id: NodeID,
+    pub address: String,
+    pub generation: u64,
+    pub version: u64,
+    pub timestamp: u64,
+}
+
+impl Default for HeartBeat {
     fn default() -> Self {
-        NodeInfo {
+        HeartBeat {
             id: "".to_string(),
             address: "".to_string(),
-            status: "unknown".to_string(),
             generation: 0,
             version: 0,
-            sent_at: time::SystemTime::now()
-                .duration_since(time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
+            timestamp: now_unix(),
         }
     }
 }
 
-struct NodeInfoRow {
-    n_times_recevied: u64,
-    node_info: NodeInfo,
-    // node_addresses_sent_to: Vec<String>,
+// store a counter for how many
+type HeartBeatReceivedCount = Arc<Mutex<HashMap<NodeID, u64>>>;
+
+// contains the counts a particular hartbeat
+type HeartBeatSentCounts = Arc<Mutex<HashMap<NodeID, HashMap<NodeID, u64>>>>;
+type NodeHeartBeats = Arc<Mutex<HashMap<String, HeartBeat>>>;
+
+trait HeartBeatChannel {
+    fn send_heartbeat(
+        &self,
+        heartbeat: HeartBeat,
+        target_addresses: Vec<String>,
+    ) -> Result<(), String>;
 }
 
-type NodeInfoTable = Arc<Mutex<HashMap<String, NodeInfoRow>>>;
+struct HeartBeatUdapChannel {
+    socket: Arc<Mutex<UdpSocket>>,
+}
+
+impl HeartBeatChannel for HeartBeatUdapChannel {
+    fn send_heartbeat(
+        &self,
+        heartbeat: HeartBeat,
+        target_addresses: Vec<String>,
+    ) -> Result<(), String> {
+        let msg = serde_json::to_string(&heartbeat).map_err(|e| e.to_string())?;
+        let locked_socket = self.socket.lock().map_err(|e| e.to_string())?;
+        for address in target_addresses {
+            locked_socket
+                .send_to(msg.as_bytes(), address)
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+}
+
+trait Addresses {
+    fn get(&self) -> Vec<String>;
+}
+
+impl Addresses for NodeHeartBeats {
+    fn get(&self) -> Vec<String> {
+        return vec!["123".to_string()];
+    }
+}
+
+type VersionStore = Arc<Mutex<u64>>;
 
 pub struct Watcher {
-    node: NodeInfo,
-    node_info_table: NodeInfoTable,
+    node: HeartBeat,
+    node_info_table: NodeHeartBeats,
     gossip_interval: u64,
     gossip_to_n_nodes: usize,
 }
 
 impl Watcher {
     pub fn new(
-        node: NodeInfo,
+        node: HeartBeat,
         seed_node_addresses: Vec<String>,
         gossip_interval: u64,
         gossip_to_n_nodes: usize,
     ) -> Self {
-        let mut table = HashMap::new();
+        let node_heartbeats: NodeHeartBeats = Arc::new(Mutex::new(HashMap::new()));
+
         for address in &seed_node_addresses {
             table.insert(
                 address.to_string(),
                 NodeInfoRow {
                     n_times_recevied: 0,
-                    node_info: NodeInfo {
+                    node_info: HeartBeat {
                         address: address.to_string(),
                         ..Default::default()
                     },
+                    send_node_counts: HashMap::new(),
                 },
             );
         }
 
-        table.insert(
-            node.id.to_string(),
-            NodeInfoRow {
-                n_times_recevied: 0,
-                node_info: node.clone(),
-            },
-        );
-        let shared_table = Arc::new(Mutex::new(table));
+        // table.insert(
+        //     node.id.to_string(),
+        //     NodeInfoRow {
+        //         n_times_recevied: 0,
+        //         node_info: node.clone(),
+        //         send_node_counts: HashMap::new(),
+        //     },
+        // );
 
         Watcher {
             node,
@@ -93,23 +139,42 @@ impl Watcher {
         let node_info_table = self.node_info_table.clone();
         let gossip_to_n_nodes = self.gossip_to_n_nodes;
         let node = self.node.clone();
+
+        let address = "123";
+
         let poll_interval_milisecs = 10;
 
         let socket = UdpSocket::bind(&self.node.address).map_err(|e| e.to_string())?;
         socket.set_nonblocking(true).map_err(|e| e.to_string())?;
-        let shared_socket = Arc::new(Mutex::new(socket));
+        let heartbeat_channel = HeartBeatUdapChannel {
+            socket: Arc::new(Mutex::new(socket)),
+        };
 
-        let s_table = node_info_table.clone();
-        let s_socket = shared_socket.clone();
+        let node_heartbeats: NodeHeartBeats = Arc::new(Mutex::new(HashMap::new()));
+
         let _ = thread::spawn(move || {
-            send_periodic_node_info_process(
-                &node.id,
+            periodic_heartbeat(
+                node.id,
+                address.to_string(),
+                1,
                 heartbeat_interval_secs,
                 gossip_to_n_nodes,
-                s_table,
-                s_socket,
+                &node_heartbeats,
+                &heartbeat_channel,
             )
         });
+
+        // let _ = thread::spawn(move || {
+        //     periodic_heartbeat(
+        //         node.id,
+        //         address.to_string(),
+        //         1,
+        //         heartbeat_interval_secs,
+        //         gossip_to_n_nodes,
+        //         &node_heartbeats,
+        //         &heartbeat_channel,
+        //     )
+        // });
 
         let s_table = node_info_table.clone();
         let s_socket = shared_socket.clone();
@@ -131,60 +196,38 @@ impl Watcher {
     }
 }
 
-fn send_periodic_node_info_process(
-    node_id: &str,
+fn periodic_heartbeat(
+    node_id: NodeID,
+    address: String,
+    generation: u64,
     heartbeat_interval_secs: u64,
-    gossip_to_n_nodes: usize,
-    node_info_table: NodeInfoTable,
-    socket: Arc<Mutex<UdpSocket>>,
+    heartbeat_spread: usize,
+    addresses: &dyn Addresses,
+    heartbeat_channel: &dyn HeartBeatChannel,
 ) {
+    let mut version = 0;
     loop {
-        let table = node_info_table.lock().unwrap();
-        let row = match table.get(node_id) {
-            Some(row) => row,
-            None => continue,
+        version += 1;
+        let heartbeat = HeartBeat {
+            id: node_id.clone(),
+            address: address.clone(),
+            generation,
+            version,
+            timestamp: now_unix(),
         };
 
-        let node = NodeInfo {
-            id: row.node_info.id.clone(),
-            address: row.node_info.address.clone(),
-            version: row.node_info.version.clone() + 1,
-            generation: row.node_info.generation.clone(),
-            status: "OK".to_string(),
-            sent_at: row.node_info.sent_at.clone(),
+        let target_addresses = select_random_n_strings(addresses.get(), heartbeat_spread);
+        match heartbeat_channel.send_heartbeat(heartbeat, target_addresses) {
+            Ok(_) => thread::sleep(Duration::from_secs(heartbeat_interval_secs)),
+            Err(_) => println!("failed to send shit"),
         };
-
-        let msg = match serde_json::to_string(&node) {
-            Ok(s) => s,
-            Err(_) => {
-                println!("Failed to serialize node");
-                continue;
-            }
-        };
-
-        let addresses: Vec<String> = table
-            .iter()
-            .map(|(_, v)| v.node_info.address.clone())
-            .collect();
-        let selected_addresses = select_random_n_strings(addresses, gossip_to_n_nodes);
-        let l_socket = socket.lock().unwrap();
-        match send_msg(msg, selected_addresses, &l_socket) {
-            Ok(_) => {
-                drop(l_socket);
-                drop(table);
-                thread::sleep(Duration::from_secs(heartbeat_interval_secs));
-            }
-            Err(e) => {
-                println!("{}", e.to_string());
-            }
-        }
     }
 }
 
 fn gossip_process(
     poll_interval_milisecs: u64,
     gossip_to_n_nodes: usize,
-    node_info_table: NodeInfoTable,
+    node_info_table: NodeHeartBeats,
     socket: Arc<Mutex<UdpSocket>>,
 ) {
     loop {
@@ -203,7 +246,7 @@ fn gossip_process(
             }
         };
 
-        let received_node_info = match serde_json::from_slice::<NodeInfo>(&buf[..size]) {
+        let received_node_info = match serde_json::from_slice::<HeartBeat>(&buf[..size]) {
             Ok(node) => node,
             Err(_) => {
                 println!("Failed to parse JSON");
@@ -264,15 +307,6 @@ fn gossip_process(
             }
         }
     }
-}
-
-fn send_msg(msg: String, target_addresses: Vec<String>, socket: &UdpSocket) -> Result<(), String> {
-    for address in target_addresses {
-        socket
-            .send_to(msg.as_bytes(), address)
-            .map_err(|e| e.to_string())?;
-    }
-    Ok(())
 }
 
 fn select_random_n_strings(a: Vec<String>, n: usize) -> Vec<String> {
